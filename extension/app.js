@@ -1477,6 +1477,265 @@ document.addEventListener('input', async (e) => {
 
 
 /* ----------------------------------------------------------------
+   SEARCH BAR — Google / Baidu search with engine selector
+   ---------------------------------------------------------------- */
+
+// Default search engine config — persisted in chrome.storage.local
+let currentSearchEngine = {
+  name: 'Google',
+  engine: 'google',
+  url: 'https://www.google.com/search?q=',
+  icon: 'https://www.google.com/s2/favicons?domain=google.com&sz=16',
+};
+
+/**
+ * loadSearchEngine()
+ * Restores the user's last-selected search engine from storage.
+ */
+async function loadSearchEngine() {
+  try {
+    const { searchEngine } = await chrome.storage.local.get('searchEngine');
+    if (searchEngine) currentSearchEngine = searchEngine;
+  } catch {}
+  updateSearchEngineUI();
+}
+
+/**
+ * updateSearchEngineUI()
+ * Updates the selector button to show the current engine.
+ */
+function updateSearchEngineUI() {
+  const iconEl = document.getElementById('searchEngineIcon');
+  const nameEl = document.getElementById('searchEngineName');
+  if (iconEl) iconEl.src = currentSearchEngine.icon;
+  if (nameEl) nameEl.textContent = currentSearchEngine.name;
+
+  // Mark the active option
+  document.querySelectorAll('.search-engine-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.engine === currentSearchEngine.engine);
+  });
+}
+
+/**
+ * performSearch()
+ * Opens the search query in a new tab using the selected engine.
+ */
+function performSearch() {
+  const input = document.getElementById('searchInput');
+  const query = (input ? input.value : '').trim();
+  if (!query) return;
+  const url = currentSearchEngine.url + encodeURIComponent(query);
+  chrome.tabs.create({ url });
+}
+
+// Toggle search engine dropdown
+document.getElementById('searchEngineSelector')?.addEventListener('click', (e) => {
+  // Don't toggle if clicking an option (handled separately)
+  if (e.target.closest('.search-engine-option')) return;
+  const selector = document.getElementById('searchEngineSelector');
+  selector.classList.toggle('open');
+});
+
+// Select a search engine from the dropdown
+document.querySelectorAll('.search-engine-option').forEach(opt => {
+  opt.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const engine = opt.dataset.engine;
+    const url    = opt.dataset.url;
+    const name   = opt.querySelector('span').textContent;
+    const icon   = opt.querySelector('img').src;
+
+    currentSearchEngine = { name, engine, url, icon };
+    await chrome.storage.local.set({ searchEngine: currentSearchEngine });
+
+    updateSearchEngineUI();
+    document.getElementById('searchEngineSelector').classList.remove('open');
+    document.getElementById('searchInput')?.focus();
+  });
+});
+
+// Close dropdown when clicking outside
+document.addEventListener('click', (e) => {
+  const selector = document.getElementById('searchEngineSelector');
+  if (selector && !selector.contains(e.target)) {
+    selector.classList.remove('open');
+  }
+});
+
+// Search on Enter key
+document.getElementById('searchInput')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    performSearch();
+  }
+});
+
+// Search button click
+document.getElementById('searchBtn')?.addEventListener('click', () => {
+  performSearch();
+});
+
+
+/* ----------------------------------------------------------------
+   QUICK LINKS — Frequently used website shortcuts
+   Stored in chrome.storage.local under the "quickLinks" key.
+   Each item: { id, name, url }
+   ---------------------------------------------------------------- */
+
+const DEFAULT_QUICK_LINKS = [
+  { id: '1', name: 'Google',  url: 'https://www.google.com' },
+  { id: '2', name: '百度',    url: 'https://www.baidu.com' },
+  { id: '3', name: 'GitHub',  url: 'https://github.com' },
+  { id: '4', name: 'YouTube', url: 'https://www.youtube.com' },
+  { id: '5', name: 'Gmail',   url: 'https://mail.google.com' },
+];
+
+/**
+ * getQuickLinks()
+ * Returns the user's quick links from storage, or defaults.
+ */
+async function getQuickLinks() {
+  try {
+    const { quickLinks } = await chrome.storage.local.get('quickLinks');
+    if (quickLinks && quickLinks.length > 0) return quickLinks;
+  } catch {}
+  return DEFAULT_QUICK_LINKS;
+}
+
+/**
+ * saveQuickLinks(links)
+ * Persists quick links to storage.
+ */
+async function saveQuickLinks(links) {
+  await chrome.storage.local.set({ quickLinks: links });
+}
+
+/**
+ * renderQuickLinks()
+ * Renders the quick links row.
+ */
+async function renderQuickLinks() {
+  const list = document.getElementById('quickLinksList');
+  if (!list) return;
+
+  const links = await getQuickLinks();
+
+  list.innerHTML = links.map(link => {
+    let domain = '';
+    try { domain = new URL(link.url).hostname; } catch {}
+    const faviconUrl = domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=32` : '';
+
+    return `
+      <a class="quick-link-item" href="${link.url}" data-link-id="${link.id}" title="${link.url}">
+        <button class="quick-link-delete" data-action="delete-quick-link" data-link-id="${link.id}" title="删除">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" /></svg>
+        </button>
+        <div class="quick-link-icon-wrapper">
+          ${faviconUrl ? `<img src="${faviconUrl}" alt="" onerror="this.style.display='none'">` : ''}
+        </div>
+        <span class="quick-link-name">${link.name}</span>
+      </a>`;
+  }).join('');
+}
+
+// Handle quick link delete
+document.addEventListener('click', async (e) => {
+  const deleteBtn = e.target.closest('[data-action="delete-quick-link"]');
+  if (!deleteBtn) return;
+
+  e.preventDefault();
+  e.stopPropagation();
+
+  const id = deleteBtn.dataset.linkId;
+  if (!id) return;
+
+  const links = await getQuickLinks();
+  const updated = links.filter(l => l.id !== id);
+  await saveQuickLinks(updated);
+
+  // Animate removal
+  const item = deleteBtn.closest('.quick-link-item');
+  if (item) {
+    item.style.transition = 'opacity 0.2s, transform 0.2s';
+    item.style.opacity = '0';
+    item.style.transform = 'scale(0.8)';
+    setTimeout(() => renderQuickLinks(), 200);
+  }
+
+  showToast('快捷方式已删除');
+});
+
+// Quick Link Modal — Add button opens the modal
+document.getElementById('quickLinkAddBtn')?.addEventListener('click', () => {
+  const modal = document.getElementById('quickLinkModal');
+  if (modal) {
+    modal.style.display = 'flex';
+    document.getElementById('quickLinkNameInput').value = '';
+    document.getElementById('quickLinkUrlInput').value = '';
+    setTimeout(() => document.getElementById('quickLinkNameInput')?.focus(), 100);
+  }
+});
+
+// Modal — Cancel
+document.getElementById('quickLinkCancelBtn')?.addEventListener('click', () => {
+  document.getElementById('quickLinkModal').style.display = 'none';
+});
+
+// Modal — click overlay to close
+document.getElementById('quickLinkModal')?.addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) {
+    e.currentTarget.style.display = 'none';
+  }
+});
+
+// Modal — Confirm add
+document.getElementById('quickLinkConfirmBtn')?.addEventListener('click', async () => {
+  const nameInput = document.getElementById('quickLinkNameInput');
+  const urlInput  = document.getElementById('quickLinkUrlInput');
+  const name = (nameInput?.value || '').trim();
+  let url    = (urlInput?.value || '').trim();
+
+  if (!name || !url) {
+    showToast('请填写名称和网址');
+    return;
+  }
+
+  // Auto-add https:// if missing
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    url = 'https://' + url;
+  }
+
+  const links = await getQuickLinks();
+  links.push({
+    id: Date.now().toString(),
+    name,
+    url,
+  });
+  await saveQuickLinks(links);
+  await renderQuickLinks();
+
+  document.getElementById('quickLinkModal').style.display = 'none';
+  showToast('快捷方式已添加');
+});
+
+// Modal — Enter to confirm
+document.getElementById('quickLinkUrlInput')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    document.getElementById('quickLinkConfirmBtn')?.click();
+  }
+});
+document.getElementById('quickLinkNameInput')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    document.getElementById('quickLinkUrlInput')?.focus();
+  }
+});
+
+
+/* ----------------------------------------------------------------
    INITIALIZE
    ---------------------------------------------------------------- */
+loadSearchEngine();
+renderQuickLinks();
 renderDashboard();

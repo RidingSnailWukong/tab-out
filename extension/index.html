@@ -29,6 +29,58 @@
   </header>
 
   <!-- ================================================================
+       SEARCH BAR — full-width search with engine selector
+       ================================================================ -->
+  <div class="search-bar-row">
+    <div class="search-bar-wrapper">
+      <div class="search-engine-selector" id="searchEngineSelector">
+        <img class="search-engine-icon" id="searchEngineIcon" src="https://www.google.com/s2/favicons?domain=google.com&sz=16" alt="">
+        <span class="search-engine-name" id="searchEngineName">Google</span>
+        <svg class="search-engine-chevron" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
+        <div class="search-engine-dropdown" id="searchEngineDropdown">
+          <div class="search-engine-option" data-engine="google" data-url="https://www.google.com/search?q=">
+            <img src="https://www.google.com/s2/favicons?domain=google.com&sz=16" alt="">
+            <span>Google</span>
+          </div>
+          <div class="search-engine-option" data-engine="baidu" data-url="https://www.baidu.com/s?wd=">
+            <img src="https://www.google.com/s2/favicons?domain=baidu.com&sz=16" alt="">
+            <span>百度</span>
+          </div>
+        </div>
+      </div>
+      <input type="text" class="search-input" id="searchInput" placeholder="搜索..." autocomplete="off">
+      <button class="search-btn" id="searchBtn" title="搜索">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" /></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- ================================================================
+       QUICK LINKS — one row of frequently used websites
+       ================================================================ -->
+  <div class="quick-links-row" id="quickLinksRow">
+    <div class="quick-links-list" id="quickLinksList"></div>
+    <button class="quick-link-add-btn" id="quickLinkAddBtn" title="添加快捷方式">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
+    </button>
+  </div>
+
+  <!-- Quick Link Add Modal -->
+  <div class="quick-link-modal-overlay" id="quickLinkModal" style="display:none">
+    <div class="quick-link-modal">
+      <div class="quick-link-modal-title">添加快捷方式</div>
+      <label class="quick-link-label">名称</label>
+      <input type="text" class="quick-link-input" id="quickLinkNameInput" placeholder="例如：GitHub" maxlength="10">
+      <label class="quick-link-label">网址</label>
+      <input type="text" class="quick-link-input" id="quickLinkUrlInput" placeholder="https://github.com">
+      <div class="quick-link-modal-actions">
+        <button class="quick-link-modal-btn cancel" id="quickLinkCancelBtn">取消</button>
+        <button class="quick-link-modal-btn confirm" id="quickLinkConfirmBtn">添加</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================================================================
        TAB OUT DUPES BANNER — appears when you have extra Tab Out tabs open
        Hidden by default; app.js shows it when dupeTabOutCount > 1
        ================================================================ -->
