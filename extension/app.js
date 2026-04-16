@@ -15,6 +15,20 @@
 
 'use strict';
 
+// Dynamically load personal config (silent when file doesn't exist)
+{
+  const xhr = new XMLHttpRequest();
+  try {
+    xhr.open('HEAD', 'config.local.js', false);
+    xhr.send();
+    if (xhr.status === 200) {
+      const s = document.createElement('script');
+      s.src = 'config.local.js';
+      document.head.appendChild(s);
+    }
+  } catch { /* file doesn't exist — that's fine */ }
+}
+
 
 /* ----------------------------------------------------------------
    CHROME TABS — Direct API Access
@@ -40,11 +54,12 @@ async function fetchOpenTabs() {
 
     const tabs = await chrome.tabs.query({});
     openTabs = tabs.map(t => ({
-      id:       t.id,
-      url:      t.url,
-      title:    t.title,
-      windowId: t.windowId,
-      active:   t.active,
+      id:         t.id,
+      url:        t.url,
+      title:      t.title,
+      windowId:   t.windowId,
+      active:     t.active,
+      favIconUrl: t.favIconUrl || '',
       // Flag Tab Out's own pages so we can detect duplicate new tabs
       isTabOut: t.url === newtabUrl || t.url === 'chrome://newtab/',
     }));
@@ -693,6 +708,128 @@ function smartTitle(title, url) {
 
 
 /* ----------------------------------------------------------------
+   FAVICON HELPERS — 3-tier fallback: local → Google → hidden
+   ---------------------------------------------------------------- */
+
+/**
+ * getFaviconUrl(tab, domain, size)
+ *
+ * Returns the best-available favicon URL with a 3-tier strategy:
+ *   1. tab.favIconUrl  — Chrome's local cache (fastest, works for all visited sites)
+ *   2. Google Favicon API — network fallback for saved/offline items
+ *   3. '' — caller should hide the <img>
+ *
+ * @param {object|null} tab    — Chrome tab object (may have .favIconUrl)
+ * @param {string}      domain — hostname, used for Google API fallback
+ * @param {number}      size   — icon size (16 or 32), default 16
+ * @returns {string} URL or ''
+ */
+function getFaviconUrl(tab, domain, size = 16) {
+  if (tab && tab.favIconUrl) return tab.favIconUrl;
+  if (domain) return `https://www.google.com/s2/favicons?domain=${domain}&sz=${size}`;
+  return '';
+}
+
+/**
+ * buildFaviconImg(tab, domain, opts)
+ *
+ * Returns an <img> HTML string with onerror fallback chain:
+ *   src = tab.favIconUrl
+ *   onerror → switch to Google API
+ *   onerror → hide element
+ *
+ * @param {object|null} tab    — Chrome tab object
+ * @param {string}      domain — hostname
+ * @param {object}      opts   — { size, cssClass, style }
+ */
+/**
+ * isUnreachableDomain(domain)
+ * Returns true if Google's favicon API won't have an icon for this domain.
+ */
+function isUnreachableDomain(domain) {
+  if (!domain) return true;
+  // Strip protocol/port if origin was passed instead of hostname
+  try { domain = new URL(domain).hostname; } catch {}
+  if (domain === 'localhost' || domain === '127.0.0.1') return true;
+  if (!domain.includes('.')) return true;  // e.g. "remote-sinan"
+  // RFC-reserved TLDs + corporate/internal domains where Google API returns 404.
+  // tab.favIconUrl (Chrome cache) is still used as Tier 1 before this check,
+  // so sites like panshi.woa.com that have real favicons still display them.
+  const skipTLDs = ['.local', '.lan', '.test', '.localhost', '.invalid', '.internal', '.corp', '.woa.com'];
+  return skipTLDs.some(tld => domain.endsWith(tld));
+}
+
+/**
+ * letterIcon(domain, size)
+ * Returns a base64-encoded SVG data-URI showing the first letter of the domain
+ * in a circle. Base64 encoding avoids all HTML/attribute escaping issues.
+ */
+function letterIcon(domain, size) {
+  let letter = '?';
+  try {
+    const clean = domain.replace(/^https?:\/\//, '').replace(/^www\./, '');
+    letter = (clean[0] || '?').toUpperCase();
+  } catch {}
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><rect width="${size}" height="${size}" rx="${size / 2}" fill="#e2e0dc"/><text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" font-family="system-ui,sans-serif" font-size="${Math.round(size * 0.55)}" fill="#786a5e">${letter}</text></svg>`;
+  return `data:image/svg+xml;base64,${btoa(svg)}`;
+}
+
+function buildFaviconImg(tab, domain, opts = {}) {
+  const size     = opts.size || 16;
+  const cssClass = opts.cssClass ? ` class="${opts.cssClass}"` : '';
+  const style    = opts.style ? ` style="${opts.style}"` : '';
+
+  const localUrl  = (tab && tab.favIconUrl) ? tab.favIconUrl : '';
+  const unreachable = isUnreachableDomain(domain);
+  const googleUrl = (domain && !unreachable)
+    ? `https://www.google.com/s2/favicons?domain=${domain}&sz=${size}`
+    : '';
+
+  // Always have a letter-icon as ultimate fallback
+  const letterFallback = letterIcon(domain || '', size);
+
+  if (localUrl) {
+    if (googleUrl) {
+      // 3 tiers: Chrome cache → Google API → letter icon
+      return `<img${cssClass}${style} src="${localUrl}" alt="" data-fallback="${googleUrl}" data-fallback-final="${letterFallback}" data-favicon-fallback>`;
+    }
+    // 2 tiers: Chrome cache → letter icon
+    return `<img${cssClass}${style} src="${localUrl}" alt="" data-fallback="${letterFallback}" data-favicon-fallback>`;
+  }
+  if (googleUrl) {
+    // 2 tiers: Google API → letter icon
+    return `<img${cssClass}${style} src="${googleUrl}" alt="" data-fallback="${letterFallback}" data-favicon-fallback>`;
+  }
+  // Direct letter icon (no network icon available)
+  return `<img${cssClass}${style} src="${letterFallback}" alt="">`;
+}
+
+// CSP-safe favicon error handling (replaces inline onerror)
+document.addEventListener('error', (e) => {
+  const img = e.target;
+  if (img.tagName !== 'IMG' || !img.hasAttribute('data-favicon-fallback')) return;
+
+  const fallbackUrl = img.getAttribute('data-fallback');
+  if (fallbackUrl) {
+    // Try next tier (e.g. Chrome cache failed → Google API)
+    img.removeAttribute('data-fallback');
+    img.src = fallbackUrl;
+  } else {
+    // Check for final fallback (letter icon)
+    const finalUrl = img.getAttribute('data-fallback-final');
+    if (finalUrl) {
+      img.removeAttribute('data-fallback-final');
+      img.removeAttribute('data-favicon-fallback'); // no more retries
+      img.src = finalUrl;
+    } else {
+      // All tiers exhausted → hide
+      img.style.display = 'none';
+    }
+  }
+}, true); // capture phase to catch img errors
+
+
+/* ----------------------------------------------------------------
    SVG ICON STRINGS
    ---------------------------------------------------------------- */
 const ICONS = {
@@ -767,9 +904,9 @@ function buildOverflowChips(hiddenTabs, urlCounts = {}) {
     const safeTitle = label.replace(/"/g, '&quot;');
     let domain = '';
     try { domain = new URL(tab.url).hostname; } catch {}
-    const faviconUrl = domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=16` : '';
+    const faviconHtml = buildFaviconImg(tab, domain, { cssClass: 'chip-favicon' });
     return `<div class="page-chip clickable${chipClass}" data-action="focus-tab" data-tab-url="${safeUrl}" title="${safeTitle}">
-      ${faviconUrl ? `<img class="chip-favicon" src="${faviconUrl}" alt="" onerror="this.style.display='none'">` : ''}
+      ${faviconHtml}
       <span class="chip-text">${label}</span>${dupeTag}
       <div class="chip-actions">
         <button class="chip-action chip-save" data-action="defer-single-tab" data-tab-url="${safeUrl}" data-tab-title="${safeTitle}" title="Save for later">
@@ -848,9 +985,9 @@ function renderDomainCard(group) {
     const safeTitle = label.replace(/"/g, '&quot;');
     let domain = '';
     try { domain = new URL(tab.url).hostname; } catch {}
-    const faviconUrl = domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=16` : '';
+    const faviconHtml = buildFaviconImg(tab, domain, { cssClass: 'chip-favicon' });
     return `<div class="page-chip clickable${chipClass}" data-action="focus-tab" data-tab-url="${safeUrl}" title="${safeTitle}">
-      ${faviconUrl ? `<img class="chip-favicon" src="${faviconUrl}" alt="" onerror="this.style.display='none'">` : ''}
+      ${faviconHtml}
       <span class="chip-text">${label}</span>${dupeTag}
       <div class="chip-actions">
         <button class="chip-action chip-save" data-action="defer-single-tab" data-tab-url="${safeUrl}" data-tab-title="${safeTitle}" title="Save for later">
@@ -966,7 +1103,7 @@ async function renderDeferredColumn() {
 function renderDeferredItem(item) {
   let domain = '';
   try { domain = new URL(item.url).hostname.replace(/^www\./, ''); } catch {}
-  const faviconUrl = `https://www.google.com/s2/favicons?domain=${domain}&sz=16`;
+  const faviconHtml = buildFaviconImg(null, domain, { style: 'width:14px;height:14px;vertical-align:-2px;margin-right:4px' });
   const ago = timeAgo(item.savedAt);
 
   return `
@@ -974,7 +1111,7 @@ function renderDeferredItem(item) {
       <input type="checkbox" class="deferred-checkbox" data-action="check-deferred" data-deferred-id="${item.id}">
       <div class="deferred-info">
         <a href="${item.url}" target="_blank" rel="noopener" class="deferred-title" title="${(item.title || '').replace(/"/g, '&quot;')}">
-          <img src="${faviconUrl}" alt="" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px" onerror="this.style.display='none'">${item.title || item.url}
+          ${faviconHtml}${item.title || item.url}
         </a>
         <div class="deferred-meta">
           <span>${domain}</span>
@@ -1623,7 +1760,9 @@ async function renderQuickLinks() {
   list.innerHTML = links.map(link => {
     let domain = '';
     try { domain = new URL(link.url).hostname; } catch {}
-    const faviconUrl = domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=32` : '';
+    // Use stored favIconUrl if available (enables local-cache tier for localhost etc.)
+    const pseudoTab = link.favIconUrl ? { favIconUrl: link.favIconUrl } : null;
+    const faviconHtml = buildFaviconImg(pseudoTab, domain, { size: 32 });
 
     return `
       <a class="quick-link-item" href="${link.url}" data-link-id="${link.id}" title="${link.url}">
@@ -1631,7 +1770,7 @@ async function renderQuickLinks() {
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" /></svg>
         </button>
         <div class="quick-link-icon-wrapper">
-          ${faviconUrl ? `<img src="${faviconUrl}" alt="" onerror="this.style.display='none'">` : ''}
+          ${faviconHtml}
         </div>
         <span class="quick-link-name">${link.name}</span>
       </a>`;
@@ -1706,10 +1845,21 @@ document.getElementById('quickLinkConfirmBtn')?.addEventListener('click', async 
   }
 
   const links = await getQuickLinks();
+
+  // Try to find a matching open tab to grab its cached favIconUrl
+  let favIconUrl = '';
+  try {
+    const matchTab = openTabs.find(t => {
+      try { return new URL(t.url).origin === new URL(url).origin; } catch { return false; }
+    });
+    if (matchTab && matchTab.favIconUrl) favIconUrl = matchTab.favIconUrl;
+  } catch {}
+
   links.push({
     id: Date.now().toString(),
     name,
     url,
+    favIconUrl,
   });
   await saveQuickLinks(links);
   await renderQuickLinks();
